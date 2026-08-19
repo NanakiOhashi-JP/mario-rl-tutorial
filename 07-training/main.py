@@ -18,7 +18,7 @@ from gymnasium.wrappers import (
 from nes_py.wrappers import JoypadSpace
 
 
-TOTAL_STEPS = 100_000
+TOTAL_STEPS = 1_000_000
 MEMORY_CAPACITY = 5000
 WARMUP_STEPS = 1000
 BATCH_SIZE = 32

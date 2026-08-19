@@ -2892,45 +2892,6 @@ uv run python 07-training/inference.py
 
 ウィンドウが開き、保存したQ-Networkがマリオを操作します。終了するときは`Ctrl + C`を押してください。
 
-### SSH先で推論する
-
-Ubuntu ServerへSSHで接続している場合、`render_mode="human"`を使っても手元の画面にゲームウィンドウは表示されません。サーバーは遠くで元気にマリオを動かしていますが、こちらからは見えない。少し寂しい状態です。
-
-そこで、ウィンドウを開かずに推論する[inference_cli.py](./07-training/inference_cli.py)も用意します。
-
-```bash
-uv run python 07-training/inference_cli.py
-```
-
-CLI版では`render_mode="rgb_array"`を使います。ゲーム画面はQ-Networkへ入力しますが、ウィンドウには表示しません。その代わり、途中経過をターミナルへ表示します。
-
-```text
-使用デバイス: cuda
-読み込んだモデル: 07-training/q_network.pt
-画面は表示せず、ターミナルへ途中経過を表示します
-step=25 episode=1 x=223 time=395 score=0 action=4:right+A+B q=139.37
-episode=1 result=終了 reward=239.0 max_x=304 time=393 score=0
-actions: 4:right+A+B=23回, 1:right=7回, 3:right+B=5回
-```
-
-途中経過では、現在位置、残り時間、スコア、選んだ行動、その行動のQ値を確認できます。エピソードが終わると、最も遠くまで進んだ位置と、各行動を何回選んだかも表示します。その場で同じ行動を繰り返していないか調べるときにも便利です。
-
-実行するステップ数と表示間隔は、オプションで変更できます。
-
-```bash
-uv run python 07-training/inference_cli.py \
-    --max-steps 1000 \
-    --log-interval 10
-```
-
-通常は待ち時間なしで推論するため、ゲームはできるだけ速く進みます。ゆっくり経過を眺めたい場合は、`--delay`で1ステップごとの待ち時間を指定できます。SkipFrameで1ステップにつき最大4フレーム進むため、実時間に近づけるなら約`0.067`秒です。
-
-```bash
-uv run python 07-training/inference_cli.py --delay 0.067
-```
-
-終了するときは、ウィンドウ版と同じく`Ctrl + C`を押します。
-
 短い動作確認だけで保存したモデルでは、学習前とほとんど変わらない可能性があります。まずはコードが動くことを確認し、その後で学習ステップを増やして変化を比べてみましょう。急に世界記録を出さなくても大丈夫です。最初の目標は、最初のクリボーより少し長く生きることです。
 
 ## 第7章のまとめ
@@ -2942,7 +2903,7 @@ uv run python 07-training/inference_cli.py --delay 0.067
 3. Replay Memoryから経験を取り出し、Q-Networkを繰り返し更新した
 4. Target Networkを定期的に最新の状態へ同期した
 5. 学習したQ-Networkをファイルへ保存した
-6. 保存したQ-Networkを読み込み、ウィンドウまたはCLIでマリオを操作した
+6. 保存したQ-Networkを読み込み、推論でマリオを操作した
 
 これで、マリオの学習から推論までが1本につながりました。学習時間や設定を変えながら、学習前と学習後で動きがどう変わるか観察してみましょう。
 
