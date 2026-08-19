@@ -12,6 +12,24 @@ from gymnasium.wrappers import (
 from nes_py.wrappers import JoypadSpace
 
 
+class SkipFrame(gym.Wrapper):
+    def __init__(self, env, skip):
+        super().__init__(env)
+        self.skip = skip
+
+    def step(self, action):
+        total_reward = 0.0
+
+        for _ in range(self.skip):
+            observation, reward, terminated, truncated, info = self.env.step(action)
+            total_reward += reward
+
+            if terminated or truncated:
+                break
+
+        return observation, total_reward, terminated, truncated, info
+
+
 class QNetwork(nn.Module):
     def __init__(self, n_actions):
         super().__init__()
@@ -38,6 +56,7 @@ def make_env(render_mode="rgb_array"):
         render_mode=render_mode,
     )
     env = JoypadSpace(env, SIMPLE_MOVEMENT)
+    env = SkipFrame(env, skip=4)
     env = ResizeObservation(env, (84, 84))
     env = GrayscaleObservation(env, keep_dim=False)
     env = FrameStackObservation(env, stack_size=4)

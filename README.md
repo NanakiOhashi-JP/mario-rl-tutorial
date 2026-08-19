@@ -1050,9 +1050,11 @@ Q値を予測するニューラルネットワークを**Q-Network**と呼びま
 
 元のゲーム画面には、マリオのひげや服の細かな模様まで入っています。しかし、次の行動を決めるために本当に知りたいのは、マリオや敵、足場がどこにあるかです。細かすぎる情報を減らし、学習しやすい形へ整える処理を**前処理**と呼びます。
 
-この章では、次の順番で画面を変換します。
+この章では、次の順番でゲームの進め方と画面を整えます。
 
 ```text
+同じ行動を4フレーム続ける
+        ↓ 4フレーム分の報酬を合計する
 (240, 256, 3) のカラー画像
         ↓ 小さくする
 (84, 84, 3)
@@ -1070,7 +1072,44 @@ PyTorchで扱える状態
 uv add torch
 ```
 
-## 1. 画面を小さくする
+## 1. 同じ行動を4フレーム続ける
+
+これまでのコードでは、`env.step(action)`を1回呼ぶたびにゲームを1フレーム進めていました。しかし、隣り合った2枚の画面はほとんど同じです。わずかな変化しかない画面を毎回見せても、計算が増えるわりに新しい情報はあまり増えません。
+
+さらに、行動を毎フレーム切り替えると、どの行動によって報酬を得たのか分かりにくくなります。例えば「右」で走り始めた直後に「A」へ切り替えると、右移動の勢いで進んだ報酬が「A」を選んだフレームに入ることがあります。手柄の持ち主が迷子です。
+
+そこで、1回選んだ行動を4フレーム続けます。この処理を**Frame Skip（フレームスキップ）**と呼びます。
+
+```python
+class SkipFrame(gym.Wrapper):
+    def __init__(self, env, skip):
+        super().__init__(env)
+        self.skip = skip
+
+    def step(self, action):
+        total_reward = 0.0
+
+        for _ in range(self.skip):
+            observation, reward, terminated, truncated, info = self.env.step(action)
+            total_reward += reward
+
+            if terminated or truncated:
+                break
+
+        return observation, total_reward, terminated, truncated, info
+```
+
+`SkipFrame`も、第3章で使っていくほかの前処理と同じラッパーです。`step()`の中で同じ行動を4回実行し、それぞれのフレームで受け取った報酬を`total_reward`へ足しています。
+
+途中でゲームが終了した場合は、残りのフレームを進めず`break`します。やられたあとまでボタンを押し続けても、マリオとしては困るだけです。
+
+```python
+env = SkipFrame(env, skip=4)
+```
+
+`skip=4`なので、これ以降に`env.step(action)`を1回呼ぶと、内部では同じ行動で最大4フレーム進みます。返ってくる`reward`も、その間に得た報酬の合計です。
+
+## 2. 画面を小さくする
 
 元の画面は`240 × 256`ピクセルです。細かな絵までよく見えますが、画像が大きいほどニューラルネットワークが計算する量も増えます。
 
@@ -1084,7 +1123,7 @@ env = ResizeObservation(env, (84, 84))
 
 `84 × 84`は絶対の正解ではありません。DQNでよく使われる大きさで、マリオや敵を見分けられる程度の情報を残しながら、計算量を大きく減らせます。また、CNNは長方形の画像も扱えるため、「正方形でなければならない」というわけでもありません。今回は実装をシンプルにするため、この大きさを使います。
 
-## 2. 色の情報を減らす
+## 3. 色の情報を減らす
 
 次は、カラー画像をグレースケールにします。色がなくても、マリオ、敵、土管、足場の位置は見分けられそうです。
 
@@ -1100,7 +1139,7 @@ env = GrayscaleObservation(env, keep_dim=False)
 
 `keep_dim=False`は、色を表していた最後の次元を残さない設定です。このあと直近4枚の画面を重ねると、その4枚が先頭の次元になります。そのため、ここで大きさ`1`の次元を残しておく必要はありません。
 
-## 3. 直近の画面を4枚重ねる
+## 4. 直近の画面を4枚重ねる
 
 1枚の画像だけでは、マリオが上へ跳んでいるのか、下へ落ちているのか判断できません。写真を1枚見ただけでは、その人がエレベーターで上がっているのか下がっているのか分からないのと同じです。
 
@@ -1114,7 +1153,9 @@ env = FrameStackObservation(env, stack_size=4)
 
 `stack_size=4`は、重ねる画面の枚数です。これで画像の形は`(84, 84)`から`(4, 84, 84)`になります。先頭の`4`には、直近4枚の画面が入っています。
 
-## 4. PyTorchのTensorへ変換する
+Frame Skipを先に入れたため、ここで重ねるのは4フレームおきの画面です。生の連続4フレームより変化が大きくなり、マリオが上昇中なのか下降中なのかを見分けやすくなります。
+
+## 5. PyTorchのTensorへ変換する
 
 ここまでの`observation`はNumPy配列です。一方、これから作るPyTorchのニューラルネットワークは、**Tensor（テンソル）**という形式でデータを受け取ります。
 
@@ -1132,7 +1173,7 @@ observation = torch.as_tensor(observation, dtype=torch.float32) / 255.0
 Gymnasiumには`NumpyToTorch`というラッパーもあります。ただし、これは画像だけでなく行動も変換します。今回使っている`JoypadSpace`とは行動の形式が合わないため、画像だけを`torch.as_tensor()`で変換します。
 :::
 
-## 5. 前処理をまとめる
+## 6. 前処理をまとめる
 
 ここまでのラッパーを、1つのコードにまとめます。第1章と同じ7種類の行動を使うため、`JoypadSpace`も忘れずに追加します。
 
@@ -1150,11 +1191,32 @@ from gymnasium.wrappers import (
 from nes_py.wrappers import JoypadSpace
 
 
+class SkipFrame(gym.Wrapper):
+    def __init__(self, env, skip):
+        super().__init__(env)
+        self.skip = skip
+
+    def step(self, action):
+        total_reward = 0.0
+
+        for _ in range(self.skip):
+            observation, reward, terminated, truncated, info = self.env.step(action)
+            total_reward += reward
+
+            if terminated or truncated:
+                break
+
+        return observation, total_reward, terminated, truncated, info
+
+
 env = gym.make(
     "SuperMarioBros-1-1-v0",
     render_mode="rgb_array",
 )
 env = JoypadSpace(env, SIMPLE_MOVEMENT)
+
+# 同じ行動を4フレーム続ける。
+env = SkipFrame(env, skip=4)
 
 # 画面を小さくし、色の情報を減らす。
 env = ResizeObservation(env, (84, 84))
@@ -1191,10 +1253,11 @@ Discrete(7)
 
 この章では、マリオの画面をDQNへ渡す準備をしました。
 
-1. 画面を`84 × 84`へ縮小した
-2. カラー画像をグレースケールにした
-3. 直近4枚を重ね、動きが分かる状態にした
-4. NumPy配列をTensorへ変換し、ピクセルの値を`0〜1`にそろえた
+1. 同じ行動を4フレーム続け、その間の報酬を合計した
+2. 画面を`84 × 84`へ縮小した
+3. カラー画像をグレースケールにした
+4. 4フレームおきの画面を4枚重ね、動きが分かる状態にした
+5. NumPy配列をTensorへ変換し、ピクセルの値を`0〜1`にそろえた
 
 最終的な`observation`の形は`(4, 84, 84)`です。これで、直近の動きを含んだ画面をPyTorchで扱えるようになりました。
 
@@ -1341,6 +1404,24 @@ from gymnasium.wrappers import (
 from nes_py.wrappers import JoypadSpace
 
 
+class SkipFrame(gym.Wrapper):
+    def __init__(self, env, skip):
+        super().__init__(env)
+        self.skip = skip
+
+    def step(self, action):
+        total_reward = 0.0
+
+        for _ in range(self.skip):
+            observation, reward, terminated, truncated, info = self.env.step(action)
+            total_reward += reward
+
+            if terminated or truncated:
+                break
+
+        return observation, total_reward, terminated, truncated, info
+
+
 class QNetwork(nn.Module):
     def __init__(self, n_actions):
         super().__init__()
@@ -1367,6 +1448,7 @@ def make_env(render_mode="rgb_array"):
         render_mode=render_mode,
     )
     env = JoypadSpace(env, SIMPLE_MOVEMENT)
+    env = SkipFrame(env, skip=4)
     env = ResizeObservation(env, (84, 84))
     env = GrayscaleObservation(env, keep_dim=False)
     env = FrameStackObservation(env, stack_size=4)
@@ -1465,7 +1547,7 @@ Q-NetworkでQ値を予測する
         ↓
 一番高いQ値の行動を選ぶ
         ↓
-その行動でゲームを1フレーム進める
+その行動でゲームを最大4フレーム進める
         ↓
 次の画面で繰り返す
 ```
@@ -1498,7 +1580,7 @@ def play(env, q_network, max_steps=1000):
             action = q_values.argmax(dim=1).item()
             observation, reward, terminated, truncated, info = env.step(action)
             env.render()
-            time.sleep(1 / 60)
+            time.sleep(4 / 60)
 
             if terminated or truncated:
                 observation, info = env.reset()
@@ -1517,6 +1599,8 @@ def main():
 if __name__ == "__main__":
     main()
 ```
+
+SkipFrameによって`env.step()`を1回呼ぶと最大4フレーム進むため、表示時も`time.sleep(4 / 60)`で約4フレーム分待ちます。
 
 推論ではゲーム画面を見たいので、`make_env(render_mode="human")`で環境を作ります。これに合わせて、`main.py`の`make_env()`も表示方法を受け取れるように変更しておきます。
 
@@ -1635,9 +1719,59 @@ class Experience:
 
 状態はTensorではなく、環境から受け取ったNumPy配列のまま保存します。元の`uint8`形式なら、各ピクセルを`0〜255`の整数1つで持てるため、`float32`のTensorより少ない容量で済みます。学習するときに、取り出した状態だけをまとめてTensorへ変換しましょう。
 
-## 2. なぜ経験をためるのか
+## 2. マリオはどんな報酬を受け取るのか
 
-経験を受け取るたび、すぐQ-Networkへ学習させることもできそうです。しかし、ゲームの画面は1フレームずつ少ししか変わりません。
+経験に保存する5つのデータのうち、`reward`についてもう少し見ておきましょう。
+
+第2章では、報酬を「よい行動でもらえるご褒美、悪い行動でもらう罰」と説明しました。では、マリオの何がよくて、何が悪いのでしょうか。
+
+実は、採点はすでにゲーム環境の中で行われています。`env.step()`で行動すると、環境は画面を進めるだけでなく、その結果を採点して`reward`として返してくれます。
+
+```python
+next_state, reward, terminated, truncated, info = env.step(action)
+```
+
+このチュートリアルで使っている環境では、主に次の変化から報酬が作られます。
+
+| 項目 | どんなときに変化するか |
+| --- | --- |
+| `progress` | これまでの最高地点より先へ進んだ |
+| `time` | 残り時間が減った |
+| `score` | ゲーム内のスコアが増えた |
+| `coins` | コインを取った |
+| `powerup` | キノコなどでパワーアップした |
+| `completion` | ステージをクリアした |
+| `death` | マリオがやられた |
+
+例えば右へ進んだときは、進んだ距離に応じて`progress`がプラスになります。一方、時間が減ると`time`がマイナスになり、マリオがやられると`death`がマイナスになります。道草より前進、生存よりクリア。なかなかせっかちな採点係です。
+
+1フレーム分の内訳は、`info["reward_components"]`で確認できます。
+
+```python
+print(f"今回の報酬: {reward}")
+print(info["reward_components"])
+```
+
+SkipFrameは4フレーム分の報酬を合計して返します。一方、`info`に入っているのは、そのうち最後に進めたフレームの情報です。そのため、`reward`と`reward_components`の合計が一致しない場合もあります。
+
+例えば、最後のフレームで右へ少し進んでいれば、`reward_components`は次のようになります。
+
+```text
+今回の報酬: 2.0
+{'progress': 1.0, 'time': 0.0, 'score': 0.0, 'coins': 0.0, 'powerup': 0.0, 'completion': 0.0, 'death': 0.0}
+```
+
+この例では、4フレーム分の報酬は`2.0`ですが、最後のフレームだけを見ると、前へ進んだことで`progress`が`1.0`になっています。複数の出来事が同時に起きれば、それぞれの値を合わせて1フレーム分の報酬が決まります。ゲーム環境は1フレームの報酬を`-15〜15`の範囲に収め、その最大4フレーム分をSkipFrameが合計します。
+
+この「何をしたら何点にするか」という採点方法を、**報酬設計**と呼びます。エージェントは、こちらの気持ちを察して動いているわけではありません。報酬をできるだけ多く集めようとしているだけです。
+
+そのため、採点基準にうまく表れていない行動を覚えることもあります。例えば、その場でジャンプし続けることには専用の減点がありません。こちらから見れば「前へ進んでくれ」と言いたくなりますが、マリオにはそのため息が聞こえないのです。
+
+まずは、環境から受け取った報酬をそのまま使って学習させます。その結果を見て困った行動が見つかったら、あとで採点方法を少し調整してみましょう。
+
+## 3. なぜ経験をためるのか
+
+経験を受け取るたび、すぐQ-Networkへ学習させることもできそうです。しかし、Frame Skipで4フレームおきにしても、前後のゲーム画面はまだよく似ています。
 
 ```text
 現在の画面
@@ -1651,7 +1785,7 @@ class Experience:
 
 この経験をためる箱を**Replay Memory（リプレイメモリ）**と呼びます。
 
-## 3. Replay Memoryを作る
+## 4. Replay Memoryを作る
 
 Replay Memoryには、次の3つの機能を持たせます。
 
@@ -1699,7 +1833,7 @@ experiences = memory.sample(batch_size=4)
 保存されている経験より大きな`batch_size`は指定できません。例えば4個取り出したいなら、先に4個以上の経験をためておく必要があります。
 :::
 
-## 4. マリオの経験を集める
+## 5. マリオの経験を集める
 
 Replay Memoryができたので、実際にマリオを動かして経験を集めます。
 
@@ -1731,7 +1865,7 @@ for _ in range(500):
 
 `done`は、`terminated`または`truncated`のどちらかが`True`なら`True`になります。ゲームが終了した場合は`reset()`し、新しいプレイの最初から経験集めを再開します。
 
-## 5. 完成したコード
+## 6. 完成したコード
 
 ここまでをまとめると、次のようになります。
 
@@ -1751,6 +1885,24 @@ from gymnasium.wrappers import (
     ResizeObservation,
 )
 from nes_py.wrappers import JoypadSpace
+
+
+class SkipFrame(gym.Wrapper):
+    def __init__(self, env, skip):
+        super().__init__(env)
+        self.skip = skip
+
+    def step(self, action):
+        total_reward = 0.0
+
+        for _ in range(self.skip):
+            observation, reward, terminated, truncated, info = self.env.step(action)
+            total_reward += reward
+
+            if terminated or truncated:
+                break
+
+        return observation, total_reward, terminated, truncated, info
 
 
 @dataclass
@@ -1783,6 +1935,7 @@ def make_env():
         render_mode="rgb_array",
     )
     env = JoypadSpace(env, SIMPLE_MOVEMENT)
+    env = SkipFrame(env, skip=4)
     env = ResizeObservation(env, (84, 84))
     env = GrayscaleObservation(env, keep_dim=False)
     env = FrameStackObservation(env, stack_size=4)
@@ -1846,9 +1999,10 @@ if __name__ == "__main__":
 この章では、マリオの経験を保存するReplay Memoryを作りました。
 
 1. 状態・行動・報酬・次の状態・終了フラグを1つの経験にまとめた
-2. `deque`を使い、決めた数だけ経験を保存できるようにした
-3. 保存した経験から、バッチをランダムに取り出せるようにした
-4. ランダムにマリオを動かし、実際の経験を集めた
+2. ゲーム環境がどのようにマリオの行動を採点しているか確認した
+3. `deque`を使い、決めた数だけ経験を保存できるようにした
+4. 保存した経験から、バッチをランダムに取り出せるようにした
+5. ランダムにマリオを動かし、実際の経験を集めた
 
 これで、Q-Networkに見せるための教材がそろいました。次の章ではReplay Memoryから経験を取り出し、第2章で登場したQ学習の式を使って、いよいよQ-Networkの点数を更新します。
 
@@ -2128,6 +2282,24 @@ GAMMA = 0.99
 LEARNING_RATE = 0.0001
 
 
+class SkipFrame(gym.Wrapper):
+    def __init__(self, env, skip):
+        super().__init__(env)
+        self.skip = skip
+
+    def step(self, action):
+        total_reward = 0.0
+
+        for _ in range(self.skip):
+            observation, reward, terminated, truncated, info = self.env.step(action)
+            total_reward += reward
+
+            if terminated or truncated:
+                break
+
+        return observation, total_reward, terminated, truncated, info
+
+
 @dataclass
 class Experience:
     state: np.ndarray
@@ -2178,6 +2350,7 @@ def make_env():
         render_mode="rgb_array",
     )
     env = JoypadSpace(env, SIMPLE_MOVEMENT)
+    env = SkipFrame(env, skip=4)
     env = ResizeObservation(env, (84, 84))
     env = GrayscaleObservation(env, keep_dim=False)
     env = FrameStackObservation(env, stack_size=4)
@@ -2349,7 +2522,7 @@ EPSILON_DECAY_STEPS = 50_000
 
 | 名前 | 役割 |
 | --- | --- |
-| `TOTAL_STEPS` | ゲームを進める合計ステップ数 |
+| `TOTAL_STEPS` | 行動を選ぶ合計ステップ数 |
 | `MEMORY_CAPACITY` | 保存する経験の最大数 |
 | `WARMUP_STEPS` | 学習を始める前に集める経験の数 |
 | `BATCH_SIZE` | 1回の学習に使う経験の数 |
@@ -2357,7 +2530,7 @@ EPSILON_DECAY_STEPS = 50_000
 | `TARGET_UPDATE_INTERVAL` | Target Networkを更新する間隔 |
 | `SAVE_INTERVAL` | モデルを途中保存する間隔 |
 
-`100_000`ステップは、コードが長時間動くことを確認するための出発点です。この回数だけで必ず1-1をクリアできるわけではありません。強化学習は、思っているより気が長い世界です。
+SkipFrameを使っているため、ここでいう1ステップではゲームが最大4フレーム進みます。`100_000`ステップは、コードが長時間動くことを確認するための出発点です。この回数だけで必ず1-1をクリアできるわけではありません。強化学習は、思っているより気が長い世界です。
 
 :::note warning
 `MEMORY_CAPACITY = 5000`では、Replay Memoryが数百MBほど使うことがあります。メモリに余裕がなければ、まず`1000`へ減らして動作を確認してください。
@@ -2455,7 +2628,7 @@ if len(memory) >= WARMUP_STEPS and step % TRAIN_INTERVAL == 0:
     )
 ```
 
-経験が1000個以上たまったら、4ステップごとに`train_step()`を呼びます。毎フレーム学習するより計算量を抑えながら、定期的にQ-Networkを更新できます。
+経験が1000個以上たまったら、4ステップごとに`train_step()`を呼びます。毎ステップ学習するより計算量を抑えながら、定期的にQ-Networkを更新できます。
 
 ## 5. Target Networkを定期的に同期する
 
@@ -2656,7 +2829,7 @@ def play(env, q_network, device, max_steps=10_000):
             action = q_values.argmax(dim=1).item()
             next_state, reward, terminated, truncated, info = env.step(action)
             env.render()
-            time.sleep(1 / 60)
+            time.sleep(4 / 60)
 
             if terminated or truncated:
                 state, info = env.reset()
@@ -2719,6 +2892,45 @@ uv run python 07-training/inference.py
 
 ウィンドウが開き、保存したQ-Networkがマリオを操作します。終了するときは`Ctrl + C`を押してください。
 
+### SSH先で推論する
+
+Ubuntu ServerへSSHで接続している場合、`render_mode="human"`を使っても手元の画面にゲームウィンドウは表示されません。サーバーは遠くで元気にマリオを動かしていますが、こちらからは見えない。少し寂しい状態です。
+
+そこで、ウィンドウを開かずに推論する[inference_cli.py](./07-training/inference_cli.py)も用意します。
+
+```bash
+uv run python 07-training/inference_cli.py
+```
+
+CLI版では`render_mode="rgb_array"`を使います。ゲーム画面はQ-Networkへ入力しますが、ウィンドウには表示しません。その代わり、途中経過をターミナルへ表示します。
+
+```text
+使用デバイス: cuda
+読み込んだモデル: 07-training/q_network.pt
+画面は表示せず、ターミナルへ途中経過を表示します
+step=25 episode=1 x=223 time=395 score=0 action=4:right+A+B q=139.37
+episode=1 result=終了 reward=239.0 max_x=304 time=393 score=0
+actions: 4:right+A+B=23回, 1:right=7回, 3:right+B=5回
+```
+
+途中経過では、現在位置、残り時間、スコア、選んだ行動、その行動のQ値を確認できます。エピソードが終わると、最も遠くまで進んだ位置と、各行動を何回選んだかも表示します。その場で同じ行動を繰り返していないか調べるときにも便利です。
+
+実行するステップ数と表示間隔は、オプションで変更できます。
+
+```bash
+uv run python 07-training/inference_cli.py \
+    --max-steps 1000 \
+    --log-interval 10
+```
+
+通常は待ち時間なしで推論するため、ゲームはできるだけ速く進みます。ゆっくり経過を眺めたい場合は、`--delay`で1ステップごとの待ち時間を指定できます。SkipFrameで1ステップにつき最大4フレーム進むため、実時間に近づけるなら約`0.067`秒です。
+
+```bash
+uv run python 07-training/inference_cli.py --delay 0.067
+```
+
+終了するときは、ウィンドウ版と同じく`Ctrl + C`を押します。
+
 短い動作確認だけで保存したモデルでは、学習前とほとんど変わらない可能性があります。まずはコードが動くことを確認し、その後で学習ステップを増やして変化を比べてみましょう。急に世界記録を出さなくても大丈夫です。最初の目標は、最初のクリボーより少し長く生きることです。
 
 ## 第7章のまとめ
@@ -2730,7 +2942,7 @@ uv run python 07-training/inference.py
 3. Replay Memoryから経験を取り出し、Q-Networkを繰り返し更新した
 4. Target Networkを定期的に最新の状態へ同期した
 5. 学習したQ-Networkをファイルへ保存した
-6. 保存したQ-Networkを読み込み、推論でマリオを操作した
+6. 保存したQ-Networkを読み込み、ウィンドウまたはCLIでマリオを操作した
 
 これで、マリオの学習から推論までが1本につながりました。学習時間や設定を変えながら、学習前と学習後で動きがどう変わるか観察してみましょう。
 

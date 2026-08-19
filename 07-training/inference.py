@@ -36,10 +36,13 @@ def play(env, q_network, device, max_steps=10_000):
             action = q_values.argmax(dim=1).item()
             next_state, reward, terminated, truncated, info = env.step(action)
             env.render()
-            time.sleep(1 / 60)
+            time.sleep(4 / 60)
 
             if terminated or truncated:
                 state, info = env.reset()
+                print(f"Survival Time: {info['time']}")
+                print(f"Score: {info['score']}")
+                print(f"Mario moved: {info['x_pos']}")
             else:
                 state = next_state
     except KeyboardInterrupt:

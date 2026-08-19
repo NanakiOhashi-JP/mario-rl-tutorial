@@ -19,7 +19,7 @@ def play(env, q_network, max_steps=1000):
             action = q_values.argmax(dim=1).item()
             observation, reward, terminated, truncated, info = env.step(action)
             env.render()
-            time.sleep(1 / 60)
+            time.sleep(4 / 60)
 
             if terminated or truncated:
                 observation, info = env.reset()

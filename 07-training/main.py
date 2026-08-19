@@ -18,7 +18,7 @@ from gymnasium.wrappers import (
 from nes_py.wrappers import JoypadSpace
 
 
-TOTAL_STEPS = 500_000
+TOTAL_STEPS = 100_000
 MEMORY_CAPACITY = 5000
 WARMUP_STEPS = 1000
 BATCH_SIZE = 32
@@ -29,10 +29,28 @@ SAVE_INTERVAL = 10_000
 GAMMA = 0.99
 LEARNING_RATE = 0.0001
 EPSILON_START = 1.0
-EPSILON_END = 0.05
-EPSILON_DECAY_STEPS = 300_000
+EPSILON_END = 0.1
+EPSILON_DECAY_STEPS = 50_000
 
 MODEL_PATH = Path(__file__).resolve().parent / "q_network.pt"
+
+
+class SkipFrame(gym.Wrapper):
+    def __init__(self, env, skip):
+        super().__init__(env)
+        self.skip = skip
+
+    def step(self, action):
+        total_reward = 0.0
+
+        for _ in range(self.skip):
+            observation, reward, terminated, truncated, info = self.env.step(action)
+            total_reward += reward
+
+            if terminated or truncated:
+                break
+
+        return observation, total_reward, terminated, truncated, info
 
 
 @dataclass
@@ -85,6 +103,7 @@ def make_env(render_mode="rgb_array"):
         render_mode=render_mode,
     )
     env = JoypadSpace(env, SIMPLE_MOVEMENT)
+    env = SkipFrame(env, skip=4)
     env = ResizeObservation(env, (84, 84))
     env = GrayscaleObservation(env, keep_dim=False)
     env = FrameStackObservation(env, stack_size=4)
