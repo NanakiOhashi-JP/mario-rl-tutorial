@@ -18,7 +18,7 @@ from gymnasium.wrappers import (
 from nes_py.wrappers import JoypadSpace
 
 
-TOTAL_STEPS = 100_000
+TOTAL_STEPS = 500_000
 MEMORY_CAPACITY = 5000
 WARMUP_STEPS = 1000
 BATCH_SIZE = 32
@@ -29,8 +29,8 @@ SAVE_INTERVAL = 10_000
 GAMMA = 0.99
 LEARNING_RATE = 0.0001
 EPSILON_START = 1.0
-EPSILON_END = 0.1
-EPSILON_DECAY_STEPS = 50_000
+EPSILON_END = 0.05
+EPSILON_DECAY_STEPS = 300_000
 
 MODEL_PATH = Path(__file__).resolve().parent / "q_network.pt"
 
@@ -79,10 +79,10 @@ class QNetwork(nn.Module):
         return self.net(x)
 
 
-def make_env():
+def make_env(render_mode="rgb_array"):
     env = gym.make(
         "SuperMarioBros-1-1-v0",
-        render_mode="rgb_array",
+        render_mode=render_mode,
     )
     env = JoypadSpace(env, SIMPLE_MOVEMENT)
     env = ResizeObservation(env, (84, 84))

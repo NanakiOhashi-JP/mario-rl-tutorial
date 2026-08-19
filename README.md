@@ -2588,6 +2588,139 @@ episode=2 step=1617 reward=541.0 epsilon=0.971 loss=0.4382
 最初は`TOTAL_STEPS = 2000`程度に減らし、エラーなく最後まで動くことを確認するのがおすすめです。動作を確認できたら、`100_000`へ戻して長時間学習させましょう。
 :::
 
+## 9. 保存したモデルで推論する
+
+学習が終わったら、保存した`q_network.pt`を読み込み、マリオを操作させてみましょう。
+
+学習中と推論中では、行動の選び方が少し違います。
+
+| 学習中 | 推論中 |
+| --- | --- |
+| ε-greedyでランダム行動も試す | Q値が一番高い行動を選ぶ |
+| Q-Networkを更新する | Q-Networkを更新しない |
+| 画面を表示しない | 画面を表示する |
+
+推論では探索する必要がないため、εは使いません。学習したQ-Networkが「これが一番よい」と判断した行動だけを選びます。
+
+まず、学習コードの`make_env()`へ`render_mode`を渡せるように変更します。
+
+```python
+def make_env(render_mode="rgb_array"):
+    env = gym.make(
+        "SuperMarioBros-1-1-v0",
+        render_mode=render_mode,
+    )
+    # 以下は同じ
+```
+
+学習時はデフォルトの`"rgb_array"`、推論時はウィンドウを表示する`"human"`を使えます。
+
+次に、`07-training`フォルダへ`inference.py`を作ります。
+
+```python:inference.py
+import time
+
+import torch
+
+from main import MODEL_PATH, QNetwork, get_device, make_env, states_to_tensor
+
+
+def load_q_network(env, device, model_path=MODEL_PATH):
+    if not model_path.exists():
+        raise FileNotFoundError(
+            f"学習済みモデルが見つかりません: {model_path}\n"
+            "先に main.py を実行してモデルを作成してください。"
+        )
+
+    q_network = QNetwork(n_actions=env.action_space.n).to(device)
+    state_dict = torch.load(
+        model_path,
+        map_location=device,
+        weights_only=True,
+    )
+    q_network.load_state_dict(state_dict)
+    q_network.eval()
+    return q_network
+
+
+def play(env, q_network, device, max_steps=10_000):
+    state, info = env.reset()
+
+    try:
+        for _ in range(max_steps):
+            state_tensor = states_to_tensor([state], device)
+
+            with torch.no_grad():
+                q_values = q_network(state_tensor)
+
+            action = q_values.argmax(dim=1).item()
+            next_state, reward, terminated, truncated, info = env.step(action)
+            env.render()
+            time.sleep(1 / 60)
+
+            if terminated or truncated:
+                state, info = env.reset()
+            else:
+                state = next_state
+    except KeyboardInterrupt:
+        pass
+    finally:
+        env.close()
+
+
+def main():
+    device = get_device()
+    env = make_env(render_mode="human")
+    q_network = load_q_network(env, device)
+
+    print(f"使用デバイス: {device}")
+    print(f"読み込んだモデル: {MODEL_PATH}")
+
+    play(env, q_network, device)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+### 保存した値をQ-Networkへ戻す
+
+```python
+state_dict = torch.load(
+    model_path,
+    map_location=device,
+    weights_only=True,
+)
+q_network.load_state_dict(state_dict)
+```
+
+`torch.load()`でファイルを読み込み、`load_state_dict()`で新しく作ったQ-Networkへ学習済みの値を入れます。
+
+`map_location=device`を指定すると、CPUで学習したモデルをGPUで動かす場合や、その逆の場合にも、現在使うデバイスへ読み込めます。
+
+### 学習済みの行動だけを選ぶ
+
+推論ループでは、ε-greedyの代わりに、Q値が一番高い行動を毎回選びます。
+
+```python
+with torch.no_grad():
+    q_values = q_network(state_tensor)
+
+action = q_values.argmax(dim=1).item()
+```
+
+この部分は、第4章で作った未学習モデルの推論と同じです。推論方法は変わらず、Q-Networkの中身だけが学習済みの値へ変わっています。
+
+プロジェクトのルートから実行します。
+
+```bash
+uv run python 07-training/inference.py
+```
+
+ウィンドウが開き、保存したQ-Networkがマリオを操作します。終了するときは`Ctrl + C`を押してください。
+
+短い動作確認だけで保存したモデルでは、学習前とほとんど変わらない可能性があります。まずはコードが動くことを確認し、その後で学習ステップを増やして変化を比べてみましょう。急に世界記録を出さなくても大丈夫です。最初の目標は、最初のクリボーより少し長く生きることです。
+
 ## 第7章のまとめ
 
 この章では、DQNの部品を学習ループへまとめました。
@@ -2597,7 +2730,8 @@ episode=2 step=1617 reward=541.0 epsilon=0.971 loss=0.4382
 3. Replay Memoryから経験を取り出し、Q-Networkを繰り返し更新した
 4. Target Networkを定期的に最新の状態へ同期した
 5. 学習したQ-Networkをファイルへ保存した
+6. 保存したQ-Networkを読み込み、推論でマリオを操作した
 
-これで、マリオを学習させるところまで完成しました。次は保存した`q_network.pt`を推論用のコードへ読み込み、学習前と学習後で動きがどう変わったか確認します。
+これで、マリオの学習から推論までが1本につながりました。学習時間や設定を変えながら、学習前と学習後で動きがどう変わるか観察してみましょう。
 
 <!-- 第7章ドラフトここまで -->
