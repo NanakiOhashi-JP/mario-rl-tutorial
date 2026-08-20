@@ -1044,15 +1044,17 @@ Q値を予測するニューラルネットワークを**Q-Network**と呼びま
 
 最後の仕組みがDQNでした。ただし、ゲーム画面をそのままニューラルネットワークへ渡すには、少し大きくて情報量も多すぎます。次の章では、マリオの画面をAIが扱いやすい形に整えます。
 
-# 第3章 マリオの画面をAI向けに整えよう
+# 第3章 マリオの操作と画面をAI向けに整えよう
 
-いよいよDQNを作りたいところですが、その前に入力となるゲーム画面を整えます。大きな野菜を丸ごと鍋へ放り込むより、食べやすい大きさに切ったほうが料理しやすい。それと同じです。
+いよいよDQNを作りたいところですが、その前に選べる行動と、入力となるゲーム画面を整えます。大きな野菜を丸ごと鍋へ放り込むより、食べやすい大きさに切ったほうが料理しやすい。それと同じです。
 
 元のゲーム画面には、マリオのひげや服の細かな模様まで入っています。しかし、次の行動を決めるために本当に知りたいのは、マリオや敵、足場がどこにあるかです。細かすぎる情報を減らし、学習しやすい形へ整える処理を**前処理**と呼びます。
 
 この章では、次の順番でゲームの進め方と画面を整えます。
 
 ```text
+7種類の行動
+        ↓ 右、右＋ジャンプの2種類に絞る
 同じ行動を4フレーム続ける
         ↓ 4フレーム分の報酬を合計する
 (240, 256, 3) のカラー画像
@@ -1072,7 +1074,35 @@ PyTorchで扱える状態
 uv add torch
 ```
 
-## 1. 同じ行動を4フレーム続ける
+## 1. 行動を2種類に絞る
+
+第1章では、`SIMPLE_MOVEMENT`に用意された7種類の行動を使いました。右や左へ進むだけでなく、その場でジャンプしたり、何もしなかったりもできます。
+
+もちろん、DQNへ7種類すべてを選ばせることもできます。しかし、今回の目的はコントローラーの全機能を発見させることではなく、マリオを右へ進ませながらDQNの仕組みを学ぶことです。選択肢が多いほど、役に立つ行動を見つけるまでに必要な経験も増えてしまいます。
+
+そこで、DQNが選べる行動を次の2つに絞ります。
+
+```python
+MOVEMENT = [
+    ["right"],
+    ["right", "A"],
+]
+```
+
+| 行動番号 | 押すボタン | 動き |
+| --- | --- | --- |
+| `0` | `right` | 右へ進む |
+| `1` | `right + A` | 右へ進みながらジャンプする |
+
+この2つなら、どちらを選んでも右へ進みます。DQNは「進むかどうか」ではなく、「いつジャンプするか」に集中できます。自由を少し減らして、まずは仕事を覚えてもらいましょう。
+
+```python
+env = JoypadSpace(env, MOVEMENT)
+```
+
+`JoypadSpace`の使い方は第1章と同じです。違うのは、渡す操作リストを`SIMPLE_MOVEMENT`から、今回作った`MOVEMENT`へ変えた点だけです。
+
+## 2. 同じ行動を4フレーム続ける
 
 これまでのコードでは、`env.step(action)`を1回呼ぶたびにゲームを1フレーム進めていました。しかし、隣り合った2枚の画面はほとんど同じです。わずかな変化しかない画面を毎回見せても、計算が増えるわりに新しい情報はあまり増えません。
 
@@ -1109,7 +1139,7 @@ env = SkipFrame(env, skip=4)
 
 `skip=4`なので、これ以降に`env.step(action)`を1回呼ぶと、内部では同じ行動で最大4フレーム進みます。返ってくる`reward`も、その間に得た報酬の合計です。
 
-## 2. 画面を小さくする
+## 3. 画面を小さくする
 
 元の画面は`240 × 256`ピクセルです。細かな絵までよく見えますが、画像が大きいほどニューラルネットワークが計算する量も増えます。
 
@@ -1123,7 +1153,7 @@ env = ResizeObservation(env, (84, 84))
 
 `84 × 84`は絶対の正解ではありません。DQNでよく使われる大きさで、マリオや敵を見分けられる程度の情報を残しながら、計算量を大きく減らせます。また、CNNは長方形の画像も扱えるため、「正方形でなければならない」というわけでもありません。今回は実装をシンプルにするため、この大きさを使います。
 
-## 3. 色の情報を減らす
+## 4. 色の情報を減らす
 
 次は、カラー画像をグレースケールにします。色がなくても、マリオ、敵、土管、足場の位置は見分けられそうです。
 
@@ -1139,7 +1169,7 @@ env = GrayscaleObservation(env, keep_dim=False)
 
 `keep_dim=False`は、色を表していた最後の次元を残さない設定です。このあと直近4枚の画面を重ねると、その4枚が先頭の次元になります。そのため、ここで大きさ`1`の次元を残しておく必要はありません。
 
-## 4. 直近の画面を4枚重ねる
+## 5. 直近の画面を4枚重ねる
 
 1枚の画像だけでは、マリオが上へ跳んでいるのか、下へ落ちているのか判断できません。写真を1枚見ただけでは、その人がエレベーターで上がっているのか下がっているのか分からないのと同じです。
 
@@ -1155,7 +1185,7 @@ env = FrameStackObservation(env, stack_size=4)
 
 Frame Skipを先に入れたため、ここで重ねるのは4フレームおきの画面です。生の連続4フレームより変化が大きくなり、マリオが上昇中なのか下降中なのかを見分けやすくなります。
 
-## 5. PyTorchのTensorへ変換する
+## 6. PyTorchのTensorへ変換する
 
 ここまでの`observation`はNumPy配列です。一方、これから作るPyTorchのニューラルネットワークは、**Tensor（テンソル）**という形式でデータを受け取ります。
 
@@ -1173,22 +1203,27 @@ observation = torch.as_tensor(observation, dtype=torch.float32) / 255.0
 Gymnasiumには`NumpyToTorch`というラッパーもあります。ただし、これは画像だけでなく行動も変換します。今回使っている`JoypadSpace`とは行動の形式が合わないため、画像だけを`torch.as_tensor()`で変換します。
 :::
 
-## 6. 前処理をまとめる
+## 7. 前処理をまとめる
 
-ここまでのラッパーを、1つのコードにまとめます。第1章と同じ7種類の行動を使うため、`JoypadSpace`も忘れずに追加します。
+ここまでの処理を、1つのコードにまとめます。
 
 ```python:main.py
 import torch
 
 import gymnasium as gym
 import gym_super_mario_bros
-from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
 from gymnasium.wrappers import (
     FrameStackObservation,
     GrayscaleObservation,
     ResizeObservation,
 )
 from nes_py.wrappers import JoypadSpace
+
+
+MOVEMENT = [
+    ["right"],
+    ["right", "A"],
+]
 
 
 class SkipFrame(gym.Wrapper):
@@ -1213,7 +1248,7 @@ env = gym.make(
     "SuperMarioBros-1-1-v0",
     render_mode="rgb_array",
 )
-env = JoypadSpace(env, SIMPLE_MOVEMENT)
+env = JoypadSpace(env, MOVEMENT)
 
 # 同じ行動を4フレーム続ける。
 env = SkipFrame(env, skip=4)
@@ -1244,7 +1279,7 @@ env.close()
 <class 'torch.Tensor'>
 torch.Size([4, 84, 84])
 torch.float32
-Discrete(7)
+Discrete(2)
 ```
 
 `reset()`だけでなく、`step()`から新しい画面を受け取ったときも同じ変換を行います。次章では、この処理を関数にまとめて繰り返し使います。
@@ -1253,31 +1288,32 @@ Discrete(7)
 
 この章では、マリオの画面をDQNへ渡す準備をしました。
 
-1. 同じ行動を4フレーム続け、その間の報酬を合計した
-2. 画面を`84 × 84`へ縮小した
-3. カラー画像をグレースケールにした
-4. 4フレームおきの画面を4枚重ね、動きが分かる状態にした
-5. NumPy配列をTensorへ変換し、ピクセルの値を`0〜1`にそろえた
+1. DQNが選べる行動を「右」と「右＋ジャンプ」の2種類に絞った
+2. 同じ行動を4フレーム続け、その間の報酬を合計した
+3. 画面を`84 × 84`へ縮小した
+4. カラー画像をグレースケールにした
+5. 4フレームおきの画面を4枚重ね、動きが分かる状態にした
+6. NumPy配列をTensorへ変換し、ピクセルの値を`0〜1`にそろえた
 
 最終的な`observation`の形は`(4, 84, 84)`です。これで、直近の動きを含んだ画面をPyTorchで扱えるようになりました。
 
-材料の下ごしらえは完了です。次の章では、この画面を受け取り、7種類の行動それぞれのQ値を予測するQ-Networkを作ります。
+材料の下ごしらえは完了です。次の章では、この画面を受け取り、2種類の行動それぞれのQ値を予測するQ-Networkを作ります。
 
 # 第4章 Q-Networkに画面を見せよう
 
 第2章では、「Qテーブルの代わりにニューラルネットワークでQ値を予測する」と説明しました。第3章では、その入力となるゲーム画面も準備しました。いよいよ、この2つをつなぎます。
 
-この章で作るのは、ゲーム画面を受け取り、7種類の行動それぞれのQ値を出力する**Q-Network**です。
+この章で作るのは、ゲーム画面を受け取り、2種類の行動それぞれのQ値を出力する**Q-Network**です。
 
 ```text
 ゲーム画面
     ↓
 Q-Network
     ↓
-7種類の行動のQ値
+2種類の行動のQ値
 ```
 
-ただし、この章ではまだ学習させません。まずは画面を入れると7個の数字が出てくる、Q-Networkの配管工事から始めます。賢くなるのはもう少し先です。
+ただし、この章ではまだ学習させません。まずは画面を入れると2個の数字が出てくる、Q-Networkの配管工事から始めます。賢くなるのはもう少し先です。
 
 ## 1. 画像からQ値が出るまで
 
@@ -1285,7 +1321,7 @@ Q-Network
 
 Q-Networkでは、まず**CNN（畳み込みニューラルネットワーク）**を使って画像の特徴を探します。CNNは小さな窓を画像の上で動かしながら、線や角、形など、判断の手がかりになりそうなものを見つける仕組みです。学習が進めば、その手がかりからマリオや敵、足場の位置を捉えられるようになります。
 
-CNNが見つけた特徴は、**全結合層**へ渡します。全結合層はそれらをまとめ、「この画面なら右は何点、ジャンプは何点」と7個のQ値に変換します。
+CNNが見つけた特徴は、**全結合層**へ渡します。全結合層はそれらをまとめ、「この画面なら右は何点、右＋ジャンプは何点」と2個のQ値に変換します。
 
 ```text
 ゲーム画面 (4, 84, 84)
@@ -1294,7 +1330,7 @@ CNNで画像の特徴を探す
         ↓
 全結合層で特徴をまとめる
         ↓
-7個のQ値
+2個のQ値
 ```
 
 ## 2. 実装
@@ -1372,14 +1408,14 @@ nn.Conv2d(4, 32, kernel_size=8, stride=4)
 
 そのため、`Flatten`で1列に並べると要素数は`64 × 7 × 7 = 3136`になります。これが`nn.Linear(7 * 7 * 64, 512)`の`7 * 7 * 64`の正体です。計算方法を暗記する必要はありません。「画像が層を通るたびに小さくなり、最後に1列へ並ぶ」と分かれば十分です。
 
-最後の`nn.Linear(512, n_actions)`が、まとめた特徴を行動ごとのQ値へ変換します。`n_actions`には、マリオが選べる行動数の`7`が入ります。
+最後の`nn.Linear(512, n_actions)`が、まとめた特徴を行動ごとのQ値へ変換します。`n_actions`には、マリオが選べる行動数の`2`が入ります。
 
 ### `forward`でデータの通り道を決める
 
 `forward()`は、受け取ったデータをどの層へ通すかを決めるメソッドです。今回は`nn.Sequential`へすべて並べたので、`self.net(x)`だけで済みます。
 
 ```python
-q_network = QNetwork(n_actions=7)
+q_network = QNetwork(n_actions=2)
 q_values = q_network(state)
 ```
 
@@ -1395,13 +1431,18 @@ from torch import nn
 
 import gymnasium as gym
 import gym_super_mario_bros
-from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
 from gymnasium.wrappers import (
     FrameStackObservation,
     GrayscaleObservation,
     ResizeObservation,
 )
 from nes_py.wrappers import JoypadSpace
+
+
+MOVEMENT = [
+    ["right"],
+    ["right", "A"],
+]
 
 
 class SkipFrame(gym.Wrapper):
@@ -1447,7 +1488,7 @@ def make_env(render_mode="rgb_array"):
         "SuperMarioBros-1-1-v0",
         render_mode=render_mode,
     )
-    env = JoypadSpace(env, SIMPLE_MOVEMENT)
+    env = JoypadSpace(env, MOVEMENT)
     env = SkipFrame(env, skip=4)
     env = ResizeObservation(env, (84, 84))
     env = GrayscaleObservation(env, keep_dim=False)
@@ -1475,7 +1516,7 @@ def main():
     print(f"入力の形: {state.shape}")
     print(f"出力の形: {q_values.shape}")
     print(f"Q値: {q_values}")
-    print(f"選んだ行動: {action} {SIMPLE_MOVEMENT[action]}")
+    print(f"選んだ行動: {action} {MOVEMENT[action]}")
 
     env.close()
 
@@ -1504,7 +1545,7 @@ PyTorchの`Conv2d`は、複数の画像をまとめて処理できるように�
 
 ### 一番高いQ値の行動を選ぶ
 
-`q_network(state)`を実行すると、7種類の行動に対応するQ値が返ってきます。
+`q_network(state)`を実行すると、2種類の行動に対応するQ値が返ってきます。
 
 ```python
 with torch.no_grad():
@@ -1525,14 +1566,14 @@ action = q_values.argmax(dim=1).item()
 
 ```text
 入力の形: torch.Size([1, 4, 84, 84])
-出力の形: torch.Size([1, 7])
-Q値: tensor([[ 0.01, -0.02, 0.03, ... ]])
-選んだ行動: 2 ['right', 'A']
+出力の形: torch.Size([1, 2])
+Q値: tensor([[ 0.01, -0.02 ]])
+選んだ行動: 0 ['right']
 ```
 
-Q値や選ばれる行動は、実行するたびに変わることがあります。今のQ-Networkは作ったばかりで、まだ一度も学習していないからです。現時点では、7個の数字をそれらしい顔で出しているだけ。マリオより先にネットワークが迷子です。
+Q値や選ばれる行動は、実行するたびに変わることがあります。今のQ-Networkは作ったばかりで、まだ一度も学習していないからです。現時点では、2個の数字をそれらしい顔で出しているだけ。マリオより先にネットワークが迷子です。
 
-それでも、ゲーム画面を入力し、7個のQ値を出し、一番高い行動を選ぶところまでつながりました。
+それでも、ゲーム画面を入力し、2個のQ値を出し、一番高い行動を選ぶところまでつながりました。
 
 ## 4. 推論でマリオを動かしてみる
 
@@ -1644,7 +1685,7 @@ uv run python inference.py
 
 ウィンドウが開き、Q-Networkが選んだ行動でマリオが動きます。`Ctrl + C`で終了できます。
 
-ただし、今のQ-Networkはまだ学習していません。最初にたまたま決まったQ値を頼りに動くため、その場から動かなかったり、左へ進もうとしたり、同じ行動を繰り返したりします。自由というより迷走です。
+ただし、今のQ-Networkはまだ学習していません。最初にたまたま決まったQ値を頼りに動くため、必要のない場所でジャンプしたり、逆にクリボーの前で走り続けたりします。前へは進みますが、危険を察する能力はまだありません。
 
 それでも、推論のコード自体はこれで完成です。学習後も使う流れは同じで、変わるのはQ-Networkの中身だけです。あとで学習済みの値を読み込めば、この同じ`play()`で成長したマリオを動かせます。
 
@@ -1653,7 +1694,7 @@ uv run python inference.py
 この章では、Q-Networkの入口から出口までを作りました。
 
 1. CNNでゲーム画面の特徴を探す
-2. 全結合層で特徴を7個のQ値へ変換する
+2. 全結合層で特徴を2個のQ値へ変換する
 3. 状態にバッチの次元を加え、Q-Networkへ入力する
 4. 一番高いQ値を持つ行動を選ぶ
 5. 推論ループを使い、Q-Networkにマリオを操作させる
@@ -1662,7 +1703,7 @@ uv run python inference.py
 
 # 第5章 マリオの経験をためよう
 
-前章では、ゲーム画面から7個のQ値を出力できました。しかし、できたばかりのQ-Networkは、まだ何がよい行動なのか知りません。ジャンプがクリボーを避ける行動なのか、穴へ飛び込む行動なのかも分からない状態です。
+前章では、ゲーム画面から2個のQ値を出力できました。しかし、できたばかりのQ-Networkは、まだ何がよい行動なのか知りません。ジャンプがクリボーを避ける行動なのか、穴へ飛び込む行動なのかも分からない状態です。
 
 Q値を学ぶには、マリオが実際に行動し、その結果を集める必要があります。
 
@@ -1878,13 +1919,18 @@ import numpy as np
 
 import gymnasium as gym
 import gym_super_mario_bros
-from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
 from gymnasium.wrappers import (
     FrameStackObservation,
     GrayscaleObservation,
     ResizeObservation,
 )
 from nes_py.wrappers import JoypadSpace
+
+
+MOVEMENT = [
+    ["right"],
+    ["right", "A"],
+]
 
 
 class SkipFrame(gym.Wrapper):
@@ -1934,7 +1980,7 @@ def make_env():
         "SuperMarioBros-1-1-v0",
         render_mode="rgb_array",
     )
-    env = JoypadSpace(env, SIMPLE_MOVEMENT)
+    env = JoypadSpace(env, MOVEMENT)
     env = SkipFrame(env, skip=4)
     env = ResizeObservation(env, (84, 84))
     env = GrayscaleObservation(env, keep_dim=False)
@@ -1987,7 +2033,7 @@ if __name__ == "__main__":
 保存した経験: 500個
 取り出した経験: 4個
 状態の形: (4, 84, 84)
-行動: 5
+行動: 1
 報酬: 3.0
 終了したか: False
 ```
@@ -2100,19 +2146,19 @@ dones = torch.tensor(
 
 ## 3. 選んだ行動のQ値を取り出す
 
-`states`をQ-Networkへ入力すると、32個の状態それぞれに7個のQ値が返ります。
+`states`をQ-Networkへ入力すると、32個の状態それぞれに2個のQ値が返ります。
 
 ```python
 all_q_values = q_network(states)
 ```
 
-`all_q_values`の形は`(32, 7)`です。しかし、経験の中で実際に選んだ行動は、それぞれ1つだけです。学習には、その行動に対応するQ値を使います。
+`all_q_values`の形は`(32, 2)`です。しかし、経験の中で実際に選んだ行動は、それぞれ1つだけです。学習には、その行動に対応するQ値を使います。
 
 例えば、次の2つの経験があったとします。
 
 ```text
-1つ目のQ値: [0.1, 0.2, 0.8, 0.3]  選んだ行動: 2
-2つ目のQ値: [0.6, 0.1, 0.2, 0.4]  選んだ行動: 0
+1つ目のQ値: [0.1, 0.8]  選んだ行動: 1
+2つ目のQ値: [0.6, 0.1]  選んだ行動: 0
 ```
 
 取り出したいのは、1つ目の`0.8`と、2つ目の`0.6`です。PyTorchでは`gather()`を使って取り出せます。
@@ -2143,7 +2189,7 @@ with torch.no_grad():
     target_q_values = rewards + GAMMA * next_q_values * (1.0 - dones)
 ```
 
-`max(dim=1).values`で、次の状態にある7個のQ値から一番高いものを選びます。
+`max(dim=1).values`で、次の状態にある2個のQ値から一番高いものを選びます。
 
 `GAMMA`は、第2章で登場した割引率です。第2章では計算を追いやすくするため`0.9`を使いましたが、ここでは遠くの報酬も残りやすい`0.99`を使います。どちらも絶対の正解ではなく、どれくらい先の報酬を大切にするかを決める設定です。
 
@@ -2268,7 +2314,6 @@ from torch import nn
 
 import gymnasium as gym
 import gym_super_mario_bros
-from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
 from gymnasium.wrappers import (
     FrameStackObservation,
     GrayscaleObservation,
@@ -2280,6 +2325,11 @@ from nes_py.wrappers import JoypadSpace
 BATCH_SIZE = 32
 GAMMA = 0.99
 LEARNING_RATE = 0.0001
+
+MOVEMENT = [
+    ["right"],
+    ["right", "A"],
+]
 
 
 class SkipFrame(gym.Wrapper):
@@ -2349,7 +2399,7 @@ def make_env():
         "SuperMarioBros-1-1-v0",
         render_mode="rgb_array",
     )
-    env = JoypadSpace(env, SIMPLE_MOVEMENT)
+    env = JoypadSpace(env, MOVEMENT)
     env = SkipFrame(env, skip=4)
     env = ResizeObservation(env, (84, 84))
     env = GrayscaleObservation(env, keep_dim=False)
@@ -2503,19 +2553,19 @@ Target Networkを更新する
 まずは、学習に使う設定をまとめておきます。
 
 ```python
-TOTAL_STEPS = 100_000
-MEMORY_CAPACITY = 5000
-WARMUP_STEPS = 1000
+TOTAL_STEPS = 1_000_000
+MEMORY_CAPACITY = 20_000
+WARMUP_STEPS = 10_000
 BATCH_SIZE = 32
 TRAIN_INTERVAL = 4
-TARGET_UPDATE_INTERVAL = 1000
+TARGET_UPDATE_INTERVAL = 10_000
 SAVE_INTERVAL = 10_000
 
 GAMMA = 0.99
 LEARNING_RATE = 0.0001
 EPSILON_START = 1.0
 EPSILON_END = 0.1
-EPSILON_DECAY_STEPS = 50_000
+EPSILON_DECAY_STEPS = 800_000
 ```
 
 名前が多いですが、一度に覚える必要はありません。役割は次のとおりです。
@@ -2530,10 +2580,10 @@ EPSILON_DECAY_STEPS = 50_000
 | `TARGET_UPDATE_INTERVAL` | Target Networkを更新する間隔 |
 | `SAVE_INTERVAL` | モデルを途中保存する間隔 |
 
-SkipFrameを使っているため、ここでいう1ステップではゲームが最大4フレーム進みます。`100_000`ステップは、コードが長時間動くことを確認するための出発点です。この回数だけで必ず1-1をクリアできるわけではありません。強化学習は、思っているより気が長い世界です。
+SkipFrameを使っているため、ここでいう1ステップではゲームが最大4フレーム進みます。今回は`1,000,000`ステップ学習させますが、この回数だけで必ず1-1をクリアできるわけではありません。強化学習は、思っているより気が長い世界です。
 
 :::note warning
-`MEMORY_CAPACITY = 5000`では、Replay Memoryが数百MBほど使うことがあります。メモリに余裕がなければ、まず`1000`へ減らして動作を確認してください。
+`MEMORY_CAPACITY = 20_000`では、Replay Memoryが1GB以上使われることがあります。メモリに余裕がなければ、`MEMORY_CAPACITY = 5_000`、`WARMUP_STEPS = 1_000`へ減らして動作を確認してください。`WARMUP_STEPS`をメモリ容量より大きくすると学習が始まらないため、2つを一緒に変更します。
 :::
 
 ## 2. 計算に使うデバイスを選ぶ
@@ -2594,7 +2644,7 @@ def calculate_epsilon(step):
     return EPSILON_START + progress * (EPSILON_END - EPSILON_START)
 ```
 
-今回は、最初の`50,000`ステップを使って、εを`1.0`から`0.1`まで少しずつ下げます。それ以降は`0.1`のままです。学習後半にも少しだけランダム行動を残し、知らない動きを試せるようにします。
+今回は、最初の`800,000`ステップを使って、εを`1.0`から`0.1`まで少しずつ下げます。それ以降は`0.1`のままです。学習後半にも少しだけランダム行動を残し、知らない動きを試せるようにします。
 
 行動を選ぶ処理は次のようになります。
 
@@ -2615,7 +2665,7 @@ def select_action(state, q_network, env, epsilon, device):
 
 Replay Memoryが空のままでは、バッチを取り出せません。また、数件だけで学習を始めても、似た経験ばかりになってしまいます。
 
-そこで、最初の`1000`ステップは経験集めに専念します。この期間を**Warm-up（ウォームアップ）**と呼びます。
+そこで、最初の`10,000`ステップは経験集めに専念します。この期間を**Warm-up（ウォームアップ）**と呼びます。
 
 ```python
 if len(memory) >= WARMUP_STEPS and step % TRAIN_INTERVAL == 0:
@@ -2628,13 +2678,13 @@ if len(memory) >= WARMUP_STEPS and step % TRAIN_INTERVAL == 0:
     )
 ```
 
-経験が1000個以上たまったら、4ステップごとに`train_step()`を呼びます。毎ステップ学習するより計算量を抑えながら、定期的にQ-Networkを更新できます。
+経験が10,000個以上たまったら、4ステップごとに`train_step()`を呼びます。毎ステップ学習するより計算量を抑えながら、定期的にQ-Networkを更新できます。
 
 ## 5. Target Networkを定期的に同期する
 
 Target Networkは、目標のQ値を安定させるため、しばらく同じ内容で使います。ただし、ずっと最初のままではQ-Networkの成長についていけません。
 
-そこで、1000ステップごとに、最新のQ-NetworkをTarget Networkへコピーします。
+そこで、10,000ステップごとに、最新のQ-NetworkをTarget Networkへコピーします。
 
 ```python
 if step % TARGET_UPDATE_INTERVAL == 0:
@@ -2722,7 +2772,7 @@ for step in range(1, TOTAL_STEPS + 1):
 実際のコードでは、エピソードが終わるたびに、報酬、ε、直近の損失を表示します。
 
 ```text
-episode=3 step=2451 reward=672.0 epsilon=0.956 loss=0.3821
+episode=3 step=2451 reward=672.0 epsilon=0.997 loss=0.3821
 ```
 
 これで、学習が止まっていないか、εが下がっているかを確認できます。ただし、1回の報酬や損失だけで良し悪しを判断する必要はありません。強化学習の数字は、わりと気分屋です。
@@ -2736,7 +2786,7 @@ episode=3 step=2451 reward=672.0 epsilon=0.956 loss=0.3821
 3. ε-greedyで行動を選ぶ
 4. Replay Memoryへ経験を保存する
 5. 4ステップごとにQ-Networkを学習させる
-6. 1000ステップごとにTarget Networkを同期する
+6. 10,000ステップごとにTarget Networkを同期する
 7. 10,000ステップごとにモデルを保存する
 
 プロジェクトのルートから実行します。
@@ -2749,8 +2799,8 @@ uv run python 07-training/main.py
 
 ```text
 使用デバイス: mps
-episode=1 step=812 reward=324.0 epsilon=0.985 loss=--
-episode=2 step=1617 reward=541.0 epsilon=0.971 loss=0.4382
+episode=1 step=812 reward=324.0 epsilon=0.999 loss=--
+episode=2 step=1617 reward=541.0 epsilon=0.998 loss=0.4382
 ...
 モデルを保存しました: 07-training/q_network.pt
 ```
@@ -2758,7 +2808,7 @@ episode=2 step=1617 reward=541.0 epsilon=0.971 loss=0.4382
 環境やランダムな行動によって、表示される数字は変わります。学習を止めるときは`Ctrl + C`を押してください。終了処理で、その時点のモデルが保存されます。
 
 :::note info
-最初は`TOTAL_STEPS = 2000`程度に減らし、エラーなく最後まで動くことを確認するのがおすすめです。動作を確認できたら、`100_000`へ戻して長時間学習させましょう。
+最初は`TOTAL_STEPS = 2000`程度に減らし、エラーなく最後まで動くことを確認するのがおすすめです。この設定ではウォームアップ中に終了するため、学習そのものはまだ始まりません。動作を確認できたら、`1_000_000`へ戻して長時間学習させましょう。
 :::
 
 ## 9. 保存したモデルで推論する
@@ -2899,7 +2949,7 @@ uv run python 07-training/inference.py
 この章では、DQNの部品を学習ループへまとめました。
 
 1. εを少しずつ下げながら、探索と活用を切り替えた
-2. 最初の1000ステップは経験集めに専念した
+2. 最初の10,000ステップは経験集めに専念した
 3. Replay Memoryから経験を取り出し、Q-Networkを繰り返し更新した
 4. Target Networkを定期的に最新の状態へ同期した
 5. 学習したQ-Networkをファイルへ保存した

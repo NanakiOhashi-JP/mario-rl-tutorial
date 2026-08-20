@@ -3,13 +3,18 @@ from torch import nn
 
 import gymnasium as gym
 import gym_super_mario_bros
-from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
 from gymnasium.wrappers import (
     FrameStackObservation,
     GrayscaleObservation,
     ResizeObservation,
 )
 from nes_py.wrappers import JoypadSpace
+
+
+MOVEMENT = [
+    ["right"],
+    ["right", "A"],
+]
 
 
 class SkipFrame(gym.Wrapper):
@@ -55,7 +60,7 @@ def make_env(render_mode="rgb_array"):
         "SuperMarioBros-1-1-v0",
         render_mode=render_mode,
     )
-    env = JoypadSpace(env, SIMPLE_MOVEMENT)
+    env = JoypadSpace(env, MOVEMENT)
     env = SkipFrame(env, skip=4)
     env = ResizeObservation(env, (84, 84))
     env = GrayscaleObservation(env, keep_dim=False)
@@ -83,7 +88,7 @@ def main():
     print(f"入力の形: {state.shape}")
     print(f"出力の形: {q_values.shape}")
     print(f"Q値: {q_values}")
-    print(f"選んだ行動: {action} {SIMPLE_MOVEMENT[action]}")
+    print(f"選んだ行動: {action} {MOVEMENT[action]}")
 
     env.close()
 

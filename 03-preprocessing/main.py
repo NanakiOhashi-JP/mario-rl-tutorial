@@ -2,13 +2,18 @@ import torch
 
 import gymnasium as gym
 import gym_super_mario_bros
-from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
 from gymnasium.wrappers import (
     FrameStackObservation,
     GrayscaleObservation,
     ResizeObservation,
 )
 from nes_py.wrappers import JoypadSpace
+
+
+MOVEMENT = [
+    ["right"],
+    ["right", "A"],
+]
 
 
 class SkipFrame(gym.Wrapper):
@@ -33,7 +38,7 @@ env = gym.make(
     "SuperMarioBros-1-1-v0",
     render_mode="rgb_array",
 )
-env = JoypadSpace(env, SIMPLE_MOVEMENT)
+env = JoypadSpace(env, MOVEMENT)
 env = SkipFrame(env, skip=4)
 
 # 画面を小さくし、色の情報を減らす。

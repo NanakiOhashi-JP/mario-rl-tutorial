@@ -6,13 +6,18 @@ import numpy as np
 
 import gymnasium as gym
 import gym_super_mario_bros
-from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
 from gymnasium.wrappers import (
     FrameStackObservation,
     GrayscaleObservation,
     ResizeObservation,
 )
 from nes_py.wrappers import JoypadSpace
+
+
+MOVEMENT = [
+    ["right"],
+    ["right", "A"],
+]
 
 
 class SkipFrame(gym.Wrapper):
@@ -62,7 +67,7 @@ def make_env():
         "SuperMarioBros-1-1-v0",
         render_mode="rgb_array",
     )
-    env = JoypadSpace(env, SIMPLE_MOVEMENT)
+    env = JoypadSpace(env, MOVEMENT)
     env = SkipFrame(env, skip=4)
     env = ResizeObservation(env, (84, 84))
     env = GrayscaleObservation(env, keep_dim=False)

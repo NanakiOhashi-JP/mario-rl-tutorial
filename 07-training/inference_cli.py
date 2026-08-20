@@ -4,10 +4,8 @@ from collections import Counter
 
 import torch
 
-from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
-
 from inference import load_q_network
-from main import MODEL_PATH, get_device, make_env, states_to_tensor
+from main import MODEL_PATH, MOVEMENT, get_device, make_env, states_to_tensor
 
 
 def parse_args():
@@ -36,7 +34,7 @@ def parse_args():
 
 
 def format_action(action):
-    buttons = "+".join(SIMPLE_MOVEMENT[action])
+    buttons = "+".join(MOVEMENT[action])
     return f"{action}:{buttons}"
 
 

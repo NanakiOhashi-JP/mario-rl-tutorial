@@ -9,7 +9,6 @@ from torch import nn
 
 import gymnasium as gym
 import gym_super_mario_bros
-from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
 from gymnasium.wrappers import (
     FrameStackObservation,
     GrayscaleObservation,
@@ -33,6 +32,11 @@ EPSILON_END = 0.1
 EPSILON_DECAY_STEPS = 800_000
 
 MODEL_PATH = Path(__file__).resolve().parent / "q_network.pt"
+
+MOVEMENT = [
+    ["right"],
+    ["right", "A"],
+]
 
 
 class SkipFrame(gym.Wrapper):
@@ -102,7 +106,7 @@ def make_env(render_mode="rgb_array"):
         "SuperMarioBros-1-1-v0",
         render_mode=render_mode,
     )
-    env = JoypadSpace(env, SIMPLE_MOVEMENT)
+    env = JoypadSpace(env, MOVEMENT)
     env = SkipFrame(env, skip=4)
     env = ResizeObservation(env, (84, 84))
     env = GrayscaleObservation(env, keep_dim=False)
