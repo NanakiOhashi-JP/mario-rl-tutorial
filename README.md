@@ -3035,3 +3035,254 @@ uv run python 07-training/inference.py
 これで、マリオの学習から推論までが1本につながりました。学習時間や設定を変えながら、学習前と学習後で動きがどう変わるか観察してみましょう。
 
 <!-- 第7章ドラフトここまで -->
+
+# 第8章 DQNの「自信満々な勘違い」を減らそう
+
+第7章では、DQNを使ってマリオを学習させました。さらに、1,000エピソードごとにランダム行動なしで実力を測り、`max_x`とモデルを保存できるようにしました。
+
+学習を続けていくと、少しずつ先へ進むモデルが出てくるはずです。しかし、エピソード数を増やせば、毎回きれいに右肩上がりになるとは限りません。
+
+```text
+evaluation episode=1000 max_x=734  ...
+evaluation episode=2000 max_x=521  ...
+evaluation episode=3000 max_x=812  ...
+```
+
+昨日できたことが今日はできない。マリオにも、そういう日はあります。
+
+もちろん、学習結果が安定しない理由は1つではありません。まだ試していない場面があるかもしれませんし、Replay Memoryに偏った経験が残っている可能性もあります。そのなかでも今回は、DQNが持つ**Q値を実際より高く見積もりやすい**という問題に注目します。
+
+そして、この問題を軽減するために**Double DQN（DDQN）**を実装します。名前は少し強そうですが、変更するコードはほんの数行です。
+
+## 1. DQNは次の行動をどう評価していた？
+
+第6章で、正解に近づけたい目標のQ値を次のように計算しました。
+
+```python
+with torch.no_grad():
+    next_q_values = target_network(next_states).max(dim=1).values
+    target_q_values = rewards + GAMMA * next_q_values * (1.0 - dones)
+```
+
+`target_network(next_states)`からは、次の状態で選べる行動ごとのQ値が返ってきます。行動が「右へ進む」と「右へ進みながらジャンプ」の2種類なら、Q値も2つです。
+
+```text
+右へ進む                  5.1
+右へ進みながらジャンプ    6.8
+```
+
+`.max(dim=1)`は、このなかから最大の`6.8`を選びます。つまり、DQNは次の2つを一度に行っています。
+
+1. どの行動が一番よさそうか選ぶ
+2. その行動にどれくらい価値があるか評価する
+
+ここで困るのが、Q-Networkの予測はいつも正確とは限らないことです。本当はそれほどよくない行動でも、たまたま高いQ値が出ることがあります。
+
+それでも最大の値を選び続けると、たまたま高く出た予測が採用されやすくなります。その値を目標にしてさらに学習するため、「このジャンプ、かなり有望です！」という勘違いが少しずつ育ってしまうことがあります。
+
+これを、Q値の**過大評価**と呼びます。
+
+:::note info
+Q値が大きいこと自体が悪いわけではありません。本当に将来の報酬が大きいなら、Q値も大きくなります。ここで問題にしているのは、実際の価値以上に高く見積もってしまうことです。
+:::
+
+## 2. 選ぶ係と採点する係を分ける
+
+DDQNでは、行動を選ぶ処理と、その行動を評価する処理を2つのネットワークへ分担させます。
+
+| 役割 | 使うネットワーク |
+| --- | --- |
+| 次にどの行動を選ぶか決める | Q-Network |
+| 選ばれた行動のQ値を調べる | Target Network |
+
+Q-Networkが「次はジャンプがよさそう」と行動を選び、Target Networkが「そのジャンプは、こちらの評価ではこのくらい」と採点します。
+
+自分で候補を選んで自分で満点をつけるのではなく、採点だけ別の人に頼むわけです。ちょっとだけ冷静になります。
+
+```text
+DQN
+Target Network → 行動を選ぶ + Q値を評価する
+
+DDQN
+Q-Network      → 行動を選ぶ
+Target Network → 選ばれた行動のQ値を評価する
+```
+
+ここで「Doubleということは、ネットワークをもう1つ追加するの？」と思うかもしれません。しかし、新しいネットワークは必要ありません。
+
+DQNですでに使っているQ-NetworkとTarget Networkの2つを、そのまま利用します。変わるのは、2つの役割分担です。
+
+## 3. DDQNのコードへ書き換える
+
+DQNでは、Target Networkが出したQ値から、そのまま最大値を選んでいました。
+
+```python
+with torch.no_grad():
+    next_q_values = target_network(next_states).max(dim=1).values
+```
+
+この部分を、次のように書き換えます。
+
+```python
+with torch.no_grad():
+    next_actions = q_network(next_states).argmax(
+        dim=1,
+        keepdim=True,
+    )
+    next_q_values = target_network(next_states).gather(
+        1,
+        next_actions,
+    ).squeeze(1)
+```
+
+まず、Q-Networkを使って、次の状態でQ値が最大になる行動を選びます。
+
+```python
+next_actions = q_network(next_states).argmax(
+    dim=1,
+    keepdim=True,
+)
+```
+
+たとえば、バッチサイズが32なら、`next_actions`には32件それぞれの「次に選びたい行動」が入ります。
+
+次に、Target Networkが予測したQ値から、先ほど選んだ行動の値だけを`gather()`で取り出します。
+
+```python
+next_q_values = target_network(next_states).gather(
+    1,
+    next_actions,
+).squeeze(1)
+```
+
+`argmax()`で行動を選ぶのはQ-Network、`gather()`でその行動を採点するのはTarget Networkです。これがDDQNの中心となる変更です。
+
+## 4. `train_step()`を完成させる
+
+DDQN版の`train_step()`は次のようになります。
+
+```python
+def train_step(q_network, target_network, memory, optimizer, device):
+    experiences = memory.sample(BATCH_SIZE)
+
+    states = states_to_tensor(
+        [experience.state for experience in experiences],
+        device,
+    )
+    actions = torch.tensor(
+        [experience.action for experience in experiences],
+        dtype=torch.long,
+        device=device,
+    ).unsqueeze(1)
+    rewards = torch.tensor(
+        [experience.reward for experience in experiences],
+        dtype=torch.float32,
+        device=device,
+    )
+    next_states = states_to_tensor(
+        [experience.next_state for experience in experiences],
+        device,
+    )
+    dones = torch.tensor(
+        [experience.done for experience in experiences],
+        dtype=torch.float32,
+        device=device,
+    )
+
+    predicted_q_values = q_network(states).gather(1, actions).squeeze(1)
+
+    with torch.no_grad():
+        next_actions = q_network(next_states).argmax(
+            dim=1,
+            keepdim=True,
+        )
+        next_q_values = target_network(next_states).gather(
+            1,
+            next_actions,
+        ).squeeze(1)
+        target_q_values = rewards + GAMMA * next_q_values * (1.0 - dones)
+
+    loss = nn.SmoothL1Loss()(predicted_q_values, target_q_values)
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    return loss.item()
+```
+
+長く見えますが、第7章から変わったのは`with torch.no_grad():`のなかだけです。Replay Memoryやε-greedy、Target Networkの同期処理などは、そのまま使えます。
+
+`torch.no_grad()`のなかでQ-Networkを使っているため、`next_actions`を選ぶ処理から勾配は計算されません。ここでは学習するのではなく、次の行動を選ぶためだけにQ-Networkを使っています。
+
+## 5. 完成したコードを動かす
+
+完成したコードは[08-double-dqn/main.py](./08-double-dqn/main.py)です。第7章のDQN版を土台にして、`train_step()`をDDQNへ変更しています。
+
+プロジェクトのルートから実行します。
+
+```bash
+uv run python 08-double-dqn/main.py
+```
+
+学習したモデルは`08-double-dqn/q_network.pt`へ保存されます。1,000エピソードごとのモデルは、`08-double-dqn/checkpoints`へ世代別に残ります。第7章の保存先とは分かれているため、DQNのモデルをうっかり上書きすることはありません。
+
+学習したモデルを画面で確認するときは、[08-double-dqn/inference.py](./08-double-dqn/inference.py)を実行します。
+
+```bash
+uv run python 08-double-dqn/inference.py
+```
+
+## 6. DQNと同じ条件で学習させる
+
+DDQNの効果を確かめるときは、まずDQNと同じ設定で学習させます。
+
+- 行動は「右」と「右＋ジャンプ」の2種類
+- Replay Memoryの容量は20,000
+- εは800,000ステップかけて`1.0`から`0.1`へ下げる
+- Target Networkは10,000ステップごとに同期する
+- 1,000エピソードごとに`max_x`を測定する
+
+複数の設定を一度に変更すると、何が結果に効いたのか分からなくなってしまいます。今回は`train_step()`だけをDDQNへ変更し、DQNとの違いを観察します。
+
+```text
+evaluation episode=1000 max_x=...
+evaluation episode=2000 max_x=...
+evaluation episode=3000 max_x=...
+```
+
+比較するときは、最後のモデルだけでなく、`checkpoints`に保存された途中のモデルや`max_x`の変化も確認してみてください。強化学習では、最終回だけ急に調子が悪いこともあります。卒業試験の日に限って寝坊するタイプです。
+
+:::note info
+DQNとDDQNはネットワークの形が同じなので、モデルファイルの形式も同じです。ただし、学習方法を公平に比べたい場合は、DQNの続きからではなく、DDQNを最初から学習させるのがおすすめです。
+:::
+
+## 7. DDQNにすれば必ずクリアできる？
+
+DDQNは、DQNのQ値が過大評価されやすい問題を軽減します。しかし、DDQNへ変えただけで必ず1-1をクリアできるわけではありません。
+
+学習がうまく進まない原因には、ほかにも次のようなものがあります。
+
+- 必要な場面をまだ十分に経験していない
+- Replay Memoryに似た経験が多く入っている
+- εが下がる速さと学習量が合っていない
+- 報酬だけでは、どの行動がよかったのか判断しにくい
+- 1回の評価結果だけを見ている
+
+DDQNは、すべてを解決する魔法ではなく、DQNの弱点を1つ減らす改良です。マリオにスターを渡すというより、少し度の合ったメガネを渡すくらいに考えておきましょう。
+
+それでも、コードの変更が小さいわりに試す価値のある方法です。まずはDQNと同じ条件で動かし、`max_x`がどう変化するか比べてみましょう。
+
+## 第8章のまとめ
+
+この章では、DQNをDDQNへ改良しました。
+
+1. DQNには、Q値を実際より高く見積もりやすい問題がある
+2. DDQNでは、行動を選ぶ処理とQ値を評価する処理を分ける
+3. Q-Networkで次の行動を選び、Target Networkでその行動を評価する
+4. 変更するのは主に`train_step()`の目標Q値を計算する部分
+5. DDQNは万能ではないため、DQNと同じ条件で結果を比較する
+
+DQNの学習ループを大きく作り直さなくても、目標Q値の作り方を変えるだけでDDQNになります。第7章で保存した評価結果と見比べながら、マリオの進み方がどう変わるか観察してみてください。
+
+<!-- 第8章ドラフトここまで -->
