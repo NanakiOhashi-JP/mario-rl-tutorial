@@ -23,7 +23,8 @@ WARMUP_STEPS = 10_000
 BATCH_SIZE = 32
 TRAIN_INTERVAL = 4
 TARGET_UPDATE_INTERVAL = 10_000
-SAVE_INTERVAL = 10_000
+EVALUATION_EPISODE_INTERVAL = 1_000
+EVALUATION_MAX_STEPS = 10_000
 
 GAMMA = 0.99
 LEARNING_RATE = 0.0001
@@ -32,6 +33,7 @@ EPSILON_END = 0.1
 EPSILON_DECAY_STEPS = 800_000
 
 MODEL_PATH = Path(__file__).resolve().parent / "q_network.pt"
+CHECKPOINT_DIR = Path(__file__).resolve().parent / "checkpoints"
 
 MOVEMENT = [
     ["right"],
@@ -184,8 +186,52 @@ def train_step(q_network, target_network, memory, optimizer, device):
     return loss.item()
 
 
+def evaluate_model(q_network, env, device):
+    state, info = env.reset()
+    max_x_pos = info.get("x_pos", 0)
+    total_reward = 0.0
+    cleared = False
+    was_training = q_network.training
+    q_network.eval()
+
+    try:
+        for evaluation_step in range(1, EVALUATION_MAX_STEPS + 1):
+            state_tensor = states_to_tensor([state], device)
+            with torch.no_grad():
+                q_values = q_network(state_tensor)
+                action = q_values.argmax(dim=1).item()
+
+            next_state, reward, terminated, truncated, info = env.step(action)
+            total_reward += reward
+            max_x_pos = max(max_x_pos, info.get("x_pos", 0))
+            cleared = info.get("flag_get", False)
+
+            if terminated or truncated or cleared:
+                break
+
+            state = next_state
+    finally:
+        if was_training:
+            q_network.train()
+
+    return max_x_pos, total_reward, evaluation_step, cleared
+
+
+def save_checkpoint(q_network, episode):
+    checkpoint_name = f"{episode:06d}ep"
+    checkpoint_path = CHECKPOINT_DIR / checkpoint_name / "q_network.pt"
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+    state_dict = q_network.state_dict()
+    torch.save(state_dict, checkpoint_path)
+    torch.save(state_dict, MODEL_PATH)
+
+    return checkpoint_path
+
+
 def main():
     env = make_env()
+    evaluation_env = make_env()
     device = get_device()
     memory = ReplayMemory(MEMORY_CAPACITY)
 
@@ -235,10 +281,7 @@ def main():
 
             if step % TARGET_UPDATE_INTERVAL == 0:
                 target_network.load_state_dict(q_network.state_dict())
-
-            if step % SAVE_INTERVAL == 0:
-                torch.save(q_network.state_dict(), MODEL_PATH)
-                print(f"モデルを保存しました: {MODEL_PATH}")
+                print(f"ターゲットネットワークを更新しました: step={step}")
 
             if done:
                 loss_text = "--" if latest_loss is None else f"{latest_loss:.4f}"
@@ -247,6 +290,21 @@ def main():
                     f"reward={episode_reward:.1f} "
                     f"epsilon={epsilon:.3f} loss={loss_text}"
                 )
+
+                if episode % EVALUATION_EPISODE_INTERVAL == 0:
+                    max_x_pos, evaluation_reward, evaluation_steps, cleared = (
+                        evaluate_model(q_network, evaluation_env, device)
+                    )
+                    checkpoint_path = save_checkpoint(q_network, episode)
+                    print(
+                        f"evaluation episode={episode} "
+                        f"max_x={max_x_pos} "
+                        f"reward={evaluation_reward:.1f} "
+                        f"steps={evaluation_steps} "
+                        f"cleared={cleared}"
+                    )
+                    print(f"モデルを保存しました: {checkpoint_path}")
+
                 state, info = env.reset()
                 episode += 1
                 episode_reward = 0.0
@@ -257,6 +315,7 @@ def main():
     finally:
         torch.save(q_network.state_dict(), MODEL_PATH)
         env.close()
+        evaluation_env.close()
         print(f"モデルを保存しました: {MODEL_PATH}")
 
 

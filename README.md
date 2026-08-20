@@ -2559,7 +2559,8 @@ WARMUP_STEPS = 10_000
 BATCH_SIZE = 32
 TRAIN_INTERVAL = 4
 TARGET_UPDATE_INTERVAL = 10_000
-SAVE_INTERVAL = 10_000
+EVALUATION_EPISODE_INTERVAL = 1_000
+EVALUATION_MAX_STEPS = 10_000
 
 GAMMA = 0.99
 LEARNING_RATE = 0.0001
@@ -2578,7 +2579,8 @@ EPSILON_DECAY_STEPS = 800_000
 | `BATCH_SIZE` | 1回の学習に使う経験の数 |
 | `TRAIN_INTERVAL` | 何ステップごとに学習するか |
 | `TARGET_UPDATE_INTERVAL` | Target Networkを更新する間隔 |
-| `SAVE_INTERVAL` | モデルを途中保存する間隔 |
+| `EVALUATION_EPISODE_INTERVAL` | 何エピソードごとに実力を測って保存するか |
+| `EVALUATION_MAX_STEPS` | 1回の実力測定を何ステップで打ち切るか |
 
 SkipFrameを使っているため、ここでいう1ステップではゲームが最大4フレーム進みます。今回は`1,000,000`ステップ学習させますが、この回数だけで必ず1-1をクリアできるわけではありません。強化学習は、思っているより気が長い世界です。
 
@@ -2693,22 +2695,87 @@ if step % TARGET_UPDATE_INTERVAL == 0:
 
 毎回追いかけるのではなく、ときどき最新情報を受け取る。Target Networkは、少し返信の遅い友人くらいがちょうどよいのです。
 
-## 6. 学習したモデルを保存する
+## 6. 1,000エピソードごとに実力を測って保存する
 
-学習には時間がかかります。途中でプログラムを終了しても続きが残るように、Q-Networkを定期的に保存します。
+学習中のマリオは、ε-greedyによってランダムな行動も選びます。そのため、学習中に表示される報酬だけを見ても、現在のモデルが本当はどこまで進めるのか少し分かりにくくなります。
+
+そこで、1,000エピソードが終わるたびに、ランダム行動なしでモデルを1回動かします。学習用とは別の環境を使うため、実力測定のプレイがReplay Memoryへ紛れ込むこともありません。いわば、1,000試合ごとの抜き打ちテストです。予告はされていますが。
+
+実力測定では、次の値を表示します。
+
+- `max_x`：そのプレイで到達した最大のx座標
+- `reward`：そのプレイで得た合計報酬
+- `steps`：終了までにかかったステップ数
+- `cleared`：コースをクリアできたか
+
+モデルには、Q値が最も高い行動だけを選ばせます。
+
+```python
+def evaluate_model(q_network, env, device):
+    state, info = env.reset()
+    max_x_pos = info.get("x_pos", 0)
+    total_reward = 0.0
+    cleared = False
+    was_training = q_network.training
+    q_network.eval()
+
+    try:
+        for evaluation_step in range(1, EVALUATION_MAX_STEPS + 1):
+            state_tensor = states_to_tensor([state], device)
+            with torch.no_grad():
+                q_values = q_network(state_tensor)
+                action = q_values.argmax(dim=1).item()
+
+            next_state, reward, terminated, truncated, info = env.step(action)
+            total_reward += reward
+            max_x_pos = max(max_x_pos, info.get("x_pos", 0))
+            cleared = info.get("flag_get", False)
+
+            if terminated or truncated or cleared:
+                break
+
+            state = next_state
+    finally:
+        if was_training:
+            q_network.train()
+
+    return max_x_pos, total_reward, evaluation_step, cleared
+```
+
+測定が終わったら、その時点のモデルを保存します。
 
 ```python
 from pathlib import Path
 
 MODEL_PATH = Path(__file__).resolve().parent / "q_network.pt"
+CHECKPOINT_DIR = Path(__file__).resolve().parent / "checkpoints"
 ```
 
 ```python
-if step % SAVE_INTERVAL == 0:
-    torch.save(q_network.state_dict(), MODEL_PATH)
+def save_checkpoint(q_network, episode):
+    checkpoint_name = f"{episode:06d}ep"
+    checkpoint_path = CHECKPOINT_DIR / checkpoint_name / "q_network.pt"
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+    state_dict = q_network.state_dict()
+    torch.save(state_dict, checkpoint_path)
+    torch.save(state_dict, MODEL_PATH)
+
+    return checkpoint_path
 ```
 
-`state_dict()`には、Q-Networkが学習した値が入っています。`torch.save()`で保存すると、`q_network.pt`というファイルが作られます。
+`q_network.pt`には常に最新のモデルが入ります。それとは別に、履歴も次のように残ります。
+
+```text
+07-training/
+├── q_network.pt
+└── checkpoints/
+    ├── 001000ep/q_network.pt
+    ├── 002000ep/q_network.pt
+    └── 003000ep/q_network.pt
+```
+
+これなら、「2,000エピソードの頃のほうがよく進んでいた」という強化学習あるあるが起きても、昔のモデルへ戻れます。
 
 `Ctrl + C`で中断した場合にも保存できるよう、最後の処理は`finally`へ置きます。
 
@@ -2716,9 +2783,14 @@ if step % SAVE_INTERVAL == 0:
 finally:
     torch.save(q_network.state_dict(), MODEL_PATH)
     env.close()
+    evaluation_env.close()
 ```
 
-これで、10,000ステップごとの途中保存に加え、正常終了や中断時にも最新のモデルが残ります。
+正常終了や中断時にも、最新のモデルは`q_network.pt`へ保存されます。
+
+:::note warning
+保存されるファイル数は学習したエピソード数に応じて増えます。容量が気になってきたら、`EVALUATION_EPISODE_INTERVAL`を`5_000`や`10_000`へ増やしてください。
+:::
 
 ## 7. 学習ループを組み立てる
 
@@ -2754,10 +2826,13 @@ for step in range(1, TOTAL_STEPS + 1):
     if step % TARGET_UPDATE_INTERVAL == 0:
         target_network.load_state_dict(q_network.state_dict())
 
-    if step % SAVE_INTERVAL == 0:
-        torch.save(q_network.state_dict(), MODEL_PATH)
-
     if done:
+        if episode % EVALUATION_EPISODE_INTERVAL == 0:
+            max_x_pos, evaluation_reward, evaluation_steps, cleared = (
+                evaluate_model(q_network, evaluation_env, device)
+            )
+            checkpoint_path = save_checkpoint(q_network, episode)
+
         state, info = env.reset()
         episode += 1
         episode_reward = 0.0
@@ -2787,7 +2862,7 @@ episode=3 step=2451 reward=672.0 epsilon=0.997 loss=0.3821
 4. Replay Memoryへ経験を保存する
 5. 4ステップごとにQ-Networkを学習させる
 6. 10,000ステップごとにTarget Networkを同期する
-7. 10,000ステップごとにモデルを保存する
+7. 1,000エピソードごとに実力を測り、モデルを保存する
 
 プロジェクトのルートから実行します。
 
@@ -2802,6 +2877,8 @@ uv run python 07-training/main.py
 episode=1 step=812 reward=324.0 epsilon=0.999 loss=--
 episode=2 step=1617 reward=541.0 epsilon=0.998 loss=0.4382
 ...
+evaluation episode=1000 max_x=734 reward=681.0 steps=214 cleared=False
+モデルを保存しました: 07-training/checkpoints/001000ep/q_network.pt
 モデルを保存しました: 07-training/q_network.pt
 ```
 
